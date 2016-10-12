@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>WebRTC-TEST</title>
+</head>
+<body>
+<div>
+    <h5>消息发送</h5>
+    <textarea id="msgText"></textarea>
+    <button onclick="sendMsgText()">发送</button>
+</div>
+
+<div>
+    <h5>本地视频</h5>
+    <video id="lvideo" autoplay></video>
+</div>
+
+</body>
+
+
+<script type="text/javascript">
+    var getUserMedia = (navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia);
+    var PeerConnection = window.RTCPeerConnection || window.mozRTCPeerConnection || window.webkitRTCPeerConnection;
+
+    var lvideo = document.getElementById('lvideo');//本地视频
+
+    var socket ;
+    var lStream;
+    var pc;//RTCPeerConnection变量
+
+    var uid = getUrlParam("uid");//用户请求标识
+    var dataChannel ;
+
+
+    openWebSocket();
+
+    console.log("getUserMedia")
+    getUserMedia.call(navigator, {
+        video: true,
+        audio: true
+    },userMediaSucc,userMediaFail);
+
+    setTimeout(createPeerConnection,1500);
+    setTimeout(createOffer,1500);
+
+    //setTimeout(createDataChannel,3000);
+
+    function userMediaSucc(stream){
+        console.log("getUserMedia()=>成功，将视频流绑定到src")
+        lvideo.src = window.URL.createObjectURL(stream);
+        lStream = stream;
+
+        console.log("Label: " + lStream.label);
+        console.log("AudioTracks" , lStream.getAudioTracks());
+        console.log("VideoTracks" , lStream.getVideoTracks());
+    }
+
+    function userMediaFail(e){
+        alert("获取视频流失败："+e.message);
+        console.log(e);
+    }
+
+    function fail(e){
+        alert(e.message);
+        console.log(e);
+    }
+
+    function openWebSocket() {
+        console.log("openWebSocket()");
+
+        socket = new WebSocket("wss://192.168.153.160:8443/webrtc-demo/webrtc.websocket/"+uid);
+
+        socket.onopen = onopen;
+        socket.onmessage = onmessage;
+        socket.onclose = onclose;
+        socket.onerror = onerror;
+
+    }
+
+    function onopen(open){
+        console.log("openWebSocket()=>onopen()");
+    }
+
+    function onmessage(message){
+        console.log("openWebSocket()=>onmessage()");
+        console.log("openWebSocket()=>onmessage():接收消息=>"+message.data);
+
+        var msg = JSON.parse(message.data);
+        console.log("openWebSocket()=>onmessage():接收类型=>"+msg.type);
+        if(msg.type === "offer"){
+            createPeerConnection();
+            console.log("openWebSocket()=>onmessage()=>setRemoteDescription()");
+            pc.setRemoteDescription(new RTCSessionDescription(msg));
+            createAnswer();
+        }else if(msg.type === "answer") {
+            console.log("openWebSocket()=>onmessage()=>setRemoteDescription()");
+            pc.setRemoteDescription(new RTCSessionDescription(msg));
+        } else if (msg.type === "candidate"){
+            console.log("openWebSocket()=>onmessage()=>addIceCandidate()");
+
+            pc.addIceCandidate(new RTCIceCandidate(msg.candidate) );
+
+            //动态创建video标签
+            addVideoDiv(msg.streamId);
+        }else if (msg.type === "nowaiting"){
+            console.log("msg.type === 'nowaiting'");
+        }else if (msg.type === "bye"){
+            //删除标签
+            delVideoDiv(msg.streamId);
+        }
+    }
+
+    function addVideoDiv(streamId){
+        var rvideo = document.getElementById(streamId);
+
+        if(rvideo === null){
+            var aDiv=document.createElement('div')
+
+            var aDivHTML = "<h5>远程视频:"+streamId+"</h5>\n<video id="+streamId+" autoplay></video>";
+            aDiv.innerHTML = aDivHTML; //设置显示的数据，可以是标签．
+
+            document.body.appendChild(aDiv);
+        }
+    }
+
+    function delVideoDiv(streamId){
+        var dDiv = document.getElementById(streamId).parentElement;
+        document.body.removeChild(dDiv);
+    }
+
+    function onclose(close){
+        console.log("openWebSocket()=>onclose()",close);
+        //openWebSocket();
+    }
+
+    // 刷新or关闭窗口退出
+    window.onbeforeunload = function() {
+        socket.send(JSON.stringify({type : "bye",streamId : lStream.id}))
+        pc.close();
+        socket.close();
+    }
+
+    function onerror(error){
+        console.log("openWebSocket()=>onerror()",error);
+
+    }
+
+
+    function createPeerConnection(){
+        console.log("createPeerConnection()");
+
+        var server = {"iceServers" : [{"url" : "stun:stun.l.google.com:19302"}]};
+
+        pc = new PeerConnection(server);
+
+        pc.onicecandidate = onicecandidate;
+        pc.onaddstream = onaddstream;
+        pc.onremovestream = onremovestream;
+
+        pc.ondatachannel = ondatachannel;
+
+    }
+
+    function ondatachannel(event){
+        console.log("ondatachannel");
+
+        dataChannel = event.channel;
+
+        console.log("ondatachannel=>dataChannel:",dataChannel);
+
+
+        dataChannel.onerror = function (error) {
+            console.log("Data Channel Error:", error);
+        };
+
+        dataChannel.onmessage = function (event) {
+            console.log("Got Data Channel Message:", event.data);
+            alert(event.data);
+        };
+
+        dataChannel.onopen = function (event) {
+            console.log(" Data Channel Open:", event);
+            //dataChannel.send(uid+":Hello World!你好!");
+        };
+
+        dataChannel.onclose = function () {
+            console.log("The Data Channel is Closed");
+        };
+    }
+
+    function onicecandidate(event){
+        var msg = {
+            type : "candidate",
+            streamId : lStream.id,
+            candidate : event.candidate
+        };
+
+        if(event.candidate){
+            socket.send(JSON.stringify(msg))
+        }
+        console.log("createPeerConnection()=>onicecandidate()",JSON.stringify(msg));
+    }
+
+    function onaddstream(event){
+        console.log("createPeerConnection()=>onaddstream()",event,event.stream);
+        var url = URL.createObjectURL(event.stream);
+
+        var videoId = event.stream.id;
+
+        var video = document.getElementById(videoId);
+        console.log("createPeerConnection()=>onaddstream():远程video=>",video);
+
+        while(video === null){
+            addVideoDiv(event.stream.id);
+            video = document.getElementById(videoId);
+        }
+
+        video.src = url;
+    }
+
+    function onremovestream(event){
+        alert("onremovestream");
+        console.log("onremovestream()",event,event.stream);
+    }
+
+
+    function createAnswer(){
+        console.log("lStream",lStream);
+        if(lStream === undefined){
+            alert("本地流创建失败");
+        }
+
+        pc.addStream(lStream);
+        console.log("openWebSocket()=>onmessage()=>createAnswer()");
+
+        pc.createAnswer(setAndSend,fail);
+    }
+
+    function createOffer(){
+        pc.addStream(lStream);
+
+        createDataChannel();
+
+        pc.createOffer(setAndSend,fail);
+    }
+
+    function setAndSend(sessionDescription){
+        console.log("setAndSend():sessionDescription=>",sessionDescription);
+
+        pc.setLocalDescription(sessionDescription);
+
+        var msgJson = JSON.stringify(sessionDescription)
+        socket.send(msgJson);
+    }
+
+    function getUrlParam(name)
+    {
+        var reg = new RegExp("(^|&)"+ name +"=([^&]*)(&|$)"); //构造一个含有目标参数的正则表达式对象
+        var r = window.location.search.substr(1).match(reg);  //匹配目标参数
+        if (r!=null) return unescape(r[2]); return null; //返回参数值
+    }
+
+
+    function createDataChannel(){
+        dataChannel = pc.createDataChannel("dataChannel-"+uid);
+
+        console.log("dataChannel.readyState:",dataChannel.readyState);
+
+        dataChannel.onerror = function (error) {
+            console.log("Data Channel Error:", error);
+        };
+
+        dataChannel.onmessage = function (event) {
+            console.log("Got Data Channel Message:", event.data);
+            alert(event.data);
+        };
+
+        dataChannel.onopen = function (event) {
+            console.log(" Data Channel Open:", event);
+            //dataChannel.send(uid+":Hello World!");
+        };
+
+        dataChannel.onclose = function () {
+            console.log("The Data Channel is Closed");
+        };
+
+    }
+
+    function sendMsgText(){
+        var msg = document.getElementById("msgText").value;
+
+        if(dataChannel.readyState === "open"){
+            dataChannel.send(msg);
+        }else{
+            alert("数据通道现状态（非open）:"+dataChannel.readyState);
+        }
+    }
+
+</script>
+
+
+</html>
